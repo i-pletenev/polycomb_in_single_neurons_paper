@@ -12,11 +12,14 @@ import matplotlib.patches as patches
 from matplotlib.colors import LinearSegmentedColormap, LogNorm
 from matplotlib import ticker
 from matplotlib.ticker import EngFormatter
+import matplotlib.gridspec as gridspec
 import seaborn as sns
 
 from pydeseq2.dds import DeseqDataSet
 from pydeseq2.default_inference import DefaultInference
 from pydeseq2.ds import DeseqStats
+
+from chromosome_plotting.chromosome_plotting import Chromosome
 
 
 def bedpe_to_bed(df):
@@ -179,11 +182,97 @@ def obs_for_bin_pairs(bin_pairs, clr, obs_colname='obs', balance=True):
     
     return bin_pairs_obs
 
+############################################################################
+# Functions related to plotting individual PcG contacts with the same anchor
+############################################################################
+
+def plot_gene_dots(gene, hand_anch, stat_gb, savefig=False):
+    """
+    For a given annotation of PcG contacts, plot snippets of contact
+    matrix for a particular anchor ("gene") with all other anchors on the same chromosome.
+
+    Parameters
+    ----------
+    gene : str
+        gene in "genes" column of stat_gb that defines an anchor of
+        PcG contacts
+    hand_anch : pd.DataFrame
+        List of PcG contact anchors with corresponding genes
+    stat_gb : pd.DataFrame
+        Dataframe with values to plot
+    savefig : str or False
+        Name of the file to save the figure
+    """
+    hg38_chromsizes = bf.fetch_chromsizes('hg38')
+    hg38_cens = bf.fetch_centromeres('hg38')\
+        .set_index('chrom')\
+        .rename(columns={'mid': 'cent'})\
+        .loc[:, 'cent']
+
+    plot_df = stat_gb.set_index('genes').loc[gene]
+    
+    if (plot_df.shape[0] > 1) and (isinstance(plot_df, pd.DataFrame)):
+        print(f"Gene {gene} has more than one dot, selecting the first dot")
+        plot_df = plot_df.iloc[0]
+        
+    vals_idx = [idx for idx in plot_df.index if idx.startswith('vals_')]
+    ndots = len(plot_df[vals_idx[0]])
+    target_genes = hand_anch.loc[plot_df['idx2'], 'genes'].str.split(',').str[0].values
+    
+    wr = [1] * ndots
+    wr.append(0.2)
+    fig, axs = plt.subplots(len(vals_idx)+1, ndots+1, dpi=200, figsize=[1 + 0.65*ndots, 0.9 * len(vals_idx)],
+                            gridspec_kw={'width_ratios': wr})
+    for ax in axs[:, ndots]:
+        ax.remove()
+    
+    # Plot chromosome
+    for ax in axs[0, :ndots]:
+        ax.remove()
+    gs = axs[0, 0].get_gridspec()
+    ax_chr = fig.add_subplot(gs[0, :-1])
+    loci = hand_anch.loc[plot_df['idx2'], 'start'].sort_values()
+    chrom = hand_anch.loc[plot_df['idx2'], 'chrom'].iloc[0]
+    chrom_plot = Chromosome(length=hg38_chromsizes[chrom], 
+                            name=chrom, 
+                            centromere=hg38_cens[chrom],
+                            loci=loci)
+    chrom_plot.plot_chromosome(ax=ax_chr, height=3, linewidth=0.4)
+    ax_chr.text(0.95, 0.95, gene, fontsize=8, transform = ax.transAxes)
+    
+    # Plot snips
+    for i, idx in enumerate(vals_idx, start=1):
+        arr = np.array(plot_df[idx])
+
+        axs[i, 0].set_ylabel(idx[5:], rotation='horizontal', fontsize=6, ha='right', va='center')
+            
+        for j in range(ndots):
+            ax = axs[i, j]
+            pup = ax.imshow(
+                arr[j, :, :], 
+                cmap='coolwarm',
+                norm=LogNorm(vmax=5, vmin=1/5)
+            )
+            ax.set_aspect(1)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            
+            if i == len(vals_idx):
+                ax.set_xlabel(target_genes[j], rotation=15, fontsize=6)
+    
+    ax_cb = fig.add_subplot(gs[1:, ndots])          
+    fig.colorbar(pup, cax=ax_cb, shrink=0.25)
+
+    if savefig:
+        plt.savefig(savefig)
+
+    return
+    
 #####################################################################
 # Functions related to plotting dots with top and bottom PCA loadings
 #####################################################################
 
-def parse_pca_df(pca_loads_path):
+def parse_pca_df(pca_loads_path, hand_anch):
     pca_load = pd.read_csv(pca_loads_path, index_col=0)
     pca_load[['chrom1', 'start1', 'end1', 'chrom2', 'start2', 'end2']] = \
         pca_load.index.astype(str).to_series()\
@@ -196,6 +285,18 @@ def parse_pca_df(pca_loads_path):
     del_chroms = ['chrX', 'chrY', 'chrM']
     pca_load = pca_load.loc[~pca_load['chrom1'].isin(del_chroms) & 
                             ~pca_load['chrom2'].isin(del_chroms)]
+
+    if 'genes' not in pca_load.columns:
+        pca_load = pca_load.merge(hand_anch, how='left', left_on=['chrom1', 'start1', 'end1'], 
+                                  right_on=['chrom', 'start', 'end'])\
+                           .drop(columns=['chrom', 'start', 'end'])\
+                           .rename(columns={'genes': 'gene1'})\
+                           .merge(hand_anch, how='left', left_on=['chrom2', 'start2', 'end2'], 
+                                  right_on=['chrom', 'start', 'end'])\
+                           .drop(columns=['chrom', 'start', 'end'])\
+                           .rename(columns={'genes': 'gene2'})
+        pca_load['genes'] = pca_load['gene1'] + ' <-> ' + pca_load['gene2']
+        
     return pca_load
 
 
@@ -377,7 +478,7 @@ def plot_hic_reg_zoom_out(clr, reg, ax, vmin, vmax, snips=None,
     return im
 
 
-def plot_av_dot_2d(pup: dict, vmax: float, ):
+def plot_av_dot_2d(pup: dict, vmax: float, **subplot_kwargs):
     bp_formatter = EngFormatter('b')
 
     # get cts from pup
@@ -387,9 +488,11 @@ def plot_av_dot_2d(pup: dict, vmax: float, ):
     nrows, ncols = len(grps1), len(grps2)
     width_ratios = [1] * ncols
     width_ratios.append(0.05)
+
+    subplot_kwargs.setdefault('dpi', 400)
+    subplot_kwargs.setdefault('figsize', (ncols / 2, nrows / 2))
     
-    fig, axs = plt.subplots(nrows, ncols+1, dpi=400, figsize=(ncols / 2, nrows / 2),
-                            gridspec_kw={'width_ratios': width_ratios})
+    fig, axs = plt.subplots(nrows, ncols+1, gridspec_kw={'width_ratios': width_ratios}, **subplot_kwargs)
     
     # vmax = {'short': 6.5, 'long': 2, 'trans': 8}
     vmin = 1/vmax
@@ -418,7 +521,7 @@ def plot_av_dot_2d(pup: dict, vmax: float, ):
             ax.set_yticks([])
             
             if i==0:
-                ax.set_title(grp2, fontsize=8)
+                ax.set_title(grp2, fontsize=6)
         
         # Colorbar
         cbar_ax = axs[i, ncols] if nrows > 1 else axs[ncols]

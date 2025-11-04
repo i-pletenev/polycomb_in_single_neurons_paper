@@ -1,0 +1,6 @@
+name: coolpuppy
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+prefix: /home/ipletenev/.conda/envs/coolpuppy
