@@ -38,3 +38,8 @@ Here, we conduct a reanalysis of the snm3C-seq data from Heffel et al. together 
 - [ctcf_and_polycomb_loops_compare.ipynb](code/ctcf_and_polycomb_loops_compare.ipynb)
 - [interval_clusterisation_by_chipseq_signal.ipynb](code/interval_clusterisation_by_chipseq_signal.ipynb)
 - [polycomb_dots_amount_with_chipseq_signal.ipynb](code/polycomb_dots_amount_with_chipseq_signal.ipynb)
+
+
+# Data 
+
+In this paper we identified a list of 263 Polycomb anchors. The list of anchors with annotated corresponding genes is located in [data/polycomb_dot_anchors.5kb.16_06_25.csv](data/polycomb_dot_anchors.5kb.16_06_25.csv)
