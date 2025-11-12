@@ -5,7 +5,7 @@
 <img src="imgs/Polycomb_1a.png" width=50% height=50%>
 
  # Dependencies
- All used *conda*-environments are listed in the `./conda_envs` folder. Each Jupiter-notebook contains a header with the path to a corresponding *conda*-environment.
+ All used *conda*-environments are listed in the `./conda_envs` folder. Each Jupyter-notebook contains a header with the path to a corresponding *conda*-environment.
 
  # Content
  Folder `code` contains Jupiter Notebooks for the following stages of the analysis:
