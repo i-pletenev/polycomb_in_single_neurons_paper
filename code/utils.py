@@ -583,8 +583,8 @@ class Pb_de:
         ds.summary()
 
         ds.results_df.loc[:, 'hand'] = ds.results_df.index.isin(self.hand_pc)
-        ds.results_df.loc[:, 'min_log10_padj'] = -np.log10(ds.results_df['padj'])
-        # ds.results_df.loc[:, 'lfc_sign'] = ds.results_df['log2FoldChange'] > 0
+        padj = ds.results_df['padj'].fillna(1.0).clip(lower=np.nextafter(0, 1))
+        ds.results_df.loc[:, 'min_log10_padj'] = -np.log10(padj)
         ds.results_df.loc[:, 'lfc_sign'] = ds.results_df['log2FoldChange']\
             .apply(lambda lfc: 1 if lfc > 0 else -1)
         
@@ -592,29 +592,121 @@ class Pb_de:
 
 
     def cont_table(self, age):
-        self.cont_tab[age] = self.results_df[age]\
+        sig_df = self.results_df[age]\
             .loc[self.results_df[age]['padj'] < 0.05, ['lfc_sign', 'hand']]\
             .value_counts()\
-            .to_frame()\
-            .reset_index()\
-            .pivot(index='lfc_sign', columns='hand')\
-            .to_numpy()
+            .rename('count')\
+            .reset_index()
+        sig_df = sig_df.pivot(index='lfc_sign', columns='hand', values='count')\
+            .reindex(index=[-1, 1], columns=[False, True], fill_value=0)
+
+        self.cont_tab[age] = sig_df.to_numpy(dtype=int)
         
         self.cont_chisq[age] = chi2_contingency(self.cont_tab[age]).pvalue
 
 
-    def plot_cont(self, age):
-        plt.figure(figsize=[1.5, 1.5], dpi=150)
-        sns.heatmap(self.cont_tab[age], square=True, annot=True, fmt='g', cbar=False, cmap='Reds')
-        plt.xticks([0.5, 1.5], ['Not at Polycomb dot', 'At Polycomb dot'], rotation=30)
-        plt.yticks([0.5, 1.5], ['More expressed in IN', 'More expressed in EN'], rotation=30)
-        plt.title(f'DEGs at {age}, p={round(self.cont_chisq[age], 2)}')
+    def plot_cont(self, age, ax=None):
+        if ax is None:
+            _, ax = plt.subplots(figsize=[2.4, 2.1], dpi=150)
+
+        heatmap_df = pd.DataFrame(
+            self.cont_tab[age],
+            index=['Higher in IN', 'Higher in EN'],
+            columns=['Outside Polycomb dots', 'At Polycomb dots'],
+        )
+        sns.heatmap(
+            heatmap_df,
+            square=True,
+            annot=True,
+            fmt='g',
+            cbar=False,
+            cmap='Reds',
+            linewidths=0.4,
+            linecolor='white',
+            annot_kws={'fontsize': 8},
+            ax=ax,
+        )
+        ax.set_title(
+            '{} contingency table\nChi-square p = {:.2g}'.format(
+                self._format_age(age),
+                self.cont_chisq[age],
+            ),
+            fontsize=9,
+            pad=8,
+        )
+        ax.set_xlabel('')
+        ax.set_ylabel('')
+        ax.tick_params(axis='x', labelrotation=20, labelsize=7)
+        ax.tick_params(axis='y', labelrotation=0, labelsize=7)
+        return ax
 
 
-    def plot_volc(self, age):
-        plt.figure(figsize=[2, 2], dpi=150)
-        plot_df = self.results_df[age].loc[self.results_df[age]['padj'] < 0.05].sort_values('hand')
-        sns.scatterplot(data=plot_df, 
-                        x='log2FoldChange', y='min_log10_padj', hue='hand', 
-                        s=10, palette={True: 'red', False: 'grey'})
-        plt.title(age)
+    def plot_volc(self, age, ax=None, padj_thresh=0.05, lfc_thresh=1):
+        if ax is None:
+            _, ax = plt.subplots(figsize=[2.6, 2.2], dpi=150)
+
+        plot_df = self.results_df[age].copy(deep=True)
+        plot_df = plot_df.dropna(subset=['log2FoldChange', 'min_log10_padj'])
+        plot_df.loc[:, 'is_signif'] = plot_df['padj'] < padj_thresh
+        plot_df.loc[:, 'volcano_group'] = 'Outside Polycomb dots'
+        plot_df.loc[plot_df['hand'], 'volcano_group'] = 'At Polycomb dots, not significant'
+        plot_df.loc[
+            plot_df['hand'] & plot_df['is_signif'] & (plot_df['log2FoldChange'] <= -lfc_thresh),
+            'volcano_group'
+        ] = 'At Polycomb dots, higher in IN'
+        plot_df.loc[
+            plot_df['hand'] & plot_df['is_signif'] & (plot_df['log2FoldChange'] >= lfc_thresh),
+            'volcano_group'
+        ] = 'At Polycomb dots, higher in EN'
+
+        palette = {
+            'Outside Polycomb dots': '#c4c4c4',
+            'At Polycomb dots, not significant': '#f6bd60',
+            'At Polycomb dots, higher in IN': '#c644a4',
+            'At Polycomb dots, higher in EN': '#6152c1',
+        }
+        order = list(palette.keys())
+
+        for group in order:
+            group_df = plot_df.loc[plot_df['volcano_group'] == group]
+            if group_df.empty:
+                continue
+            ax.scatter(
+                group_df['log2FoldChange'],
+                group_df['min_log10_padj'],
+                s=10,
+                c=palette[group],
+                alpha=0.75 if group != 'Outside Polycomb dots' else 0.45,
+                edgecolors='none',
+                rasterized=True,
+                label=group,
+            )
+
+        ax.axhline(-np.log10(padj_thresh), linestyle='--', linewidth=0.8, color='#666666')
+        ax.axvline(-lfc_thresh, linestyle='--', linewidth=0.8, color='#666666')
+        ax.axvline(lfc_thresh, linestyle='--', linewidth=0.8, color='#666666')
+        ax.set_title('{} volcano plot'.format(self._format_age(age)), fontsize=9, pad=8)
+        ax.set_xlabel('log2 fold change (EN / IN)', fontsize=8)
+        ax.set_ylabel('-log10 adjusted p-value', fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.spines[['top', 'right']].set_visible(False)
+        ax.grid(axis='y', alpha=0.2, linewidth=0.4)
+        ax.legend(
+            frameon=False,
+            fontsize=6,
+            loc='upper right',
+            handletextpad=0.3,
+            borderaxespad=0.2,
+        )
+        return ax
+
+
+    @staticmethod
+    def _format_age(age):
+        age_map = {
+            '2T': '2T',
+            'fetal': 'Fetal',
+            'infant': 'Infant',
+            'adult': 'Adult',
+        }
+        return age_map.get(age, age)
